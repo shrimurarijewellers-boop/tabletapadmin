@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Table Tap | Master Admin & Billing (₹ currency)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <!-- jsPDF for invoice generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- html2canvas for QR capture -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --cafe-gold: #c5a059; --cafe-dark: #1a120b; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: #f8fafc; overflow: hidden; }
+        .sidebar-active { background: var(--cafe-gold) !important; color: white !important; }
+        .tab-content { display: none; }
+        .tab-active { display: block; }
+        .status-badge { font-size: 10px; font-weight: 800; padding: 4px 12px; border-radius: 99px; text-transform: uppercase; }
+        .btn-action { transition: 0.2s; }
+        .btn-action:hover { transform: scale(1.05); }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--cafe-gold);
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* invoice preview hidden */
+        #invoice-template {
+            position: absolute;
+            left: -9999px;
+            top: 0;
+            width: 800px;
+            background: white;
+            padding: 40px;
+            border-radius: 24px;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+    </style>
+</head>
+<body class="flex h-screen">
+
+    <!-- Hidden invoice template for PDF generation (with ₹ currency) -->
+    <div id="invoice-template">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #c5a059; padding-bottom: 20px;">
+            <div>
+                <h1 style="font-size: 36px; font-weight: 800; margin:0;">TABLE TAP</h1>
+                <p style="color: #c5a059; font-weight:600;">Smart QR Ordering</p>
+            </div>
+            <div style="text-align: right;">
+                <p style="font-weight:800; font-size:24px;">INVOICE</p>
+                <p id="invoice-date" style="color:#666;">01 Apr 2026</p>
+            </div>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; margin: 30px 0;">
+            <div>
+                <p style="font-weight:600; color:#666;">BILL TO:</p>
+                <p id="invoice-cafe-name" style="font-size:20px; font-weight:800;">Cafe Name</p>
+                <p id="invoice-cafe-email">email@example.com</p>
+            </div>
+            <div style="text-align:right;">
+                <p style="font-weight:600; color:#666;">INVOICE #:</p>
+                <p id="invoice-number">TT-2026-001</p>
+                <p style="font-weight:600; color:#666; margin-top:10px;">DUE DATE:</p>
+                <p id="invoice-due">30 Apr 2026</p>
+            </div>
+        </div>
+
+        <table style="width:100%; border-collapse:collapse; margin:30px 0;">
+            <thead>
+                <tr style="background:#f5f3f0;">
+                    <th style="padding:12px; text-align:left;">Description</th>
+                    <th style="padding:12px; text-align:right;">Amount (₹)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="padding:12px;" id="invoice-desc">Monthly Subscription (3 tables)</td>
+                    <td style="padding:12px; text-align:right;" id="invoice-amount">999</td>
+                </tr>
+                <tr>
+                    <td style="padding:12px; font-weight:600;">Total</td>
+                    <td style="padding:12px; text-align:right; font-weight:800; font-size:20px;" id="invoice-total">₹999</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="display: flex; align-items: center; gap: 20px; margin-top: 40px; padding-top: 20px; border-top: 2px dashed #ccc;">
+            <div>
+                <p style="font-weight:600;">Scan to pay via UPI</p>
+                <img id="invoice-qr" src="" alt="UPI QR" width="120" height="120" style="border:1px solid #eee;">
+            </div>
+            <div>
+                <p style="font-weight:800; color:#c5a059;">UPI ID: jaineshsethyj@oksbi</p>
+                <p style="color:#666;">Use any UPI app to complete payment</p>
+                <p style="margin-top:20px; font-size:12px; color:#999;">Thank you for choosing Table Tap!</p>
+            </div>
+        </div>
+    </div>
+
+    <aside class="w-64 bg-[#1a120b] text-slate-400 flex flex-col">
+        <div class="p-8 border-b border-slate-800 flex items-center gap-3">
+            <div class="w-8 h-8 bg-[#c5a059] rounded-lg flex items-center justify-center text-white font-bold">TT</div>
+            <span class="text-white font-bold tracking-tighter">ADMIN<span class="text-[#c5a059]">OS</span></span>
+        </div>
+        <nav class="flex-1 p-4 space-y-2 mt-4">
+            <button onclick="switchTab('leads')" id="nav-leads" class="sidebar-active w-full flex items-center gap-3 p-3 rounded-xl font-semibold text-sm">
+                <i data-lucide="users" size="18"></i> Leads Pipeline
+            </button>
+            <button onclick="switchTab('customers')" id="nav-customers" class="w-full flex items-center gap-3 p-3 rounded-xl font-semibold text-sm hover:bg-white/5 transition">
+                <i data-lucide="award" size="18"></i> Paid Customers
+            </button>
+            <button onclick="switchTab('billing')" id="nav-billing" class="w-full flex items-center gap-3 p-3 rounded-xl font-semibold text-sm hover:bg-white/5 transition">
+                <i data-lucide="receipt" size="18"></i> Billing & QR
+            </button>
+        </nav>
+    </aside>
+
+    <main class="flex-1 flex flex-col overflow-y-auto">
+        <header class="h-20 bg-white border-b px-8 flex items-center justify-between sticky top-0 z-10">
+            <h2 id="page-title" class="text-xl font-bold italic">Leads Pipeline</h2>
+            <button onclick="syncData()" class="bg-slate-100 p-2 rounded-lg hover:bg-slate-200"><i data-lucide="refresh-cw" size="18"></i></button>
+        </header>
+
+        <div class="p-8">
+            <div id="global-loading" class="fixed inset-0 bg-black/20 flex items-center justify-center z-50 hidden">
+                <div class="bg-white p-6 rounded-2xl shadow-xl flex items-center gap-3">
+                    <div class="loading-spinner"></div>
+                    <span>Syncing with Firebase...</span>
+                </div>
+            </div>
+
+            <section id="tab-leads" class="tab-content tab-active">
+                <div class="bg-white rounded-[2rem] shadow-xl overflow-hidden border">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-50 border-b">
+                            <tr>
+                                <th class="p-6 text-[10px] uppercase text-slate-400">Café / Name</th>
+                                <th class="p-6 text-[10px] uppercase text-slate-400">Mobile</th>
+                                <th class="p-6 text-[10px] uppercase text-slate-400">Status</th>
+                                <th class="p-6 text-[10px] uppercase text-slate-400">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leads-list">
+                            <tr><td colspan="4" class="text-center p-12 text-slate-400">Loading leads from Firebase...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="tab-customers" class="tab-content">
+                <div class="grid md:grid-cols-3 gap-6" id="customers-grid">
+                    <div class="col-span-3 text-center p-12 text-slate-400">No paid customers yet. Convert leads to customers.</div>
+                </div>
+            </section>
+
+            <section id="tab-billing" class="tab-content">
+                <div class="max-w-4xl mx-auto grid md:grid-cols-2 gap-10">
+                    <div class="bg-white p-10 rounded-[2.5rem] shadow-xl border">
+                        <h3 class="text-2xl font-bold mb-6">Create Invoice (₹)</h3>
+                        <div class="space-y-4">
+                            <input type="text" id="bill-name" placeholder="Customer Café Name" class="w-full p-4 bg-slate-50 rounded-xl outline-none border">
+                            <input type="email" id="bill-email" placeholder="Customer Email (optional)" class="w-full p-4 bg-slate-50 rounded-xl outline-none border">
+                            <select id="bill-type" class="w-full p-4 bg-slate-50 rounded-xl border">
+                                <option value="999">Monthly Subscription (₹999) - 3 tables</option>
+                                <option value="399">One-time Upgrade (₹399) - to 10 tables</option>
+                                <option value="1398">Full Setup Bundle (₹1398) - first month + upgrade</option>
+                            </select>
+                            <button onclick="generateAndDownloadBill()" class="w-full bg-[#1a120b] text-white py-4 rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-opacity-80 transition">
+                                <i data-lucide="file-text" size="16" class="inline mr-2"></i> Generate & Download PDF
+                            </button>
+                        </div>
+                    </div>
+                    <div class="bg-[#1a120b] p-10 rounded-[2.5rem] shadow-xl text-center text-white">
+                        <h3 class="text-xl font-bold mb-6 text-[#c5a059]">Your UPI QR</h3>
+                        <div class="bg-white p-4 rounded-3xl inline-block mb-6">
+                            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa=jaineshsethyj@oksbi&pn=Jainesh%20Seth" 
+                                 alt="Payment QR" class="w-48 h-48">
+                        </div>
+                        <p class="text-xs text-slate-400 uppercase tracking-widest font-bold">Scan with any UPI app</p>
+                        <p class="text-lg font-black mt-2 text-[#c5a059]">jaineshsethyj@oksbi</p>
+                        <p class="text-xs mt-4 text-slate-400">UPI ID: jaineshsethyj@oksbi</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        // ==================== FIREBASE CONFIG ====================
+        const firebaseConfig = {
+            apiKey: "AIzaSyC3X_V-d1Yk_jg7l9YODBIFFsVNNk663mk",
+            authDomain: "serveproadmin.firebaseapp.com",
+            projectId: "serveproadmin",
+            storageBucket: "serveproadmin.firebasestorage.app",
+            messagingSenderId: "489934156049",
+            appId: "1:489934156049:web:2a597f37eaff93177ddcb0",
+            measurementId: "G-LSKEDF8N2Z"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        
+        const LEADS_COLLECTION = 'demoRequests';
+        const CUSTOMERS_COLLECTION = 'paidCustomers';
+
+        let leads = [];
+        let customers = [];
+
+        const leadsList = document.getElementById('leads-list');
+        const customersGrid = document.getElementById('customers-grid');
+        const globalLoading = document.getElementById('global-loading');
+
+        // ==================== FIREBASE LOADS ====================
+        async function loadLeadsFromFirebase() {
+            showLoading(true);
+            try {
+                const snapshot = await db.collection(LEADS_COLLECTION).orderBy('requestedAt', 'desc').get();
+                leads = [];
+                snapshot.forEach(doc => {
+                    leads.push({ id: doc.id, ...doc.data() });
+                });
+                renderLeads();
+            } catch (error) {
+                console.error("Error loading leads:", error);
+                leadsList.innerHTML = `<tr><td colspan="4" class="text-center p-12 text-red-400">Error loading leads: ${error.message}</td></tr>`;
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function loadCustomersFromFirebase() {
+            try {
+                const snapshot = await db.collection(CUSTOMERS_COLLECTION).orderBy('convertedAt', 'desc').get();
+                customers = [];
+                snapshot.forEach(doc => {
+                    customers.push({ id: doc.id, ...doc.data() });
+                });
+                renderCustomers();
+            } catch (error) {
+                console.error("Error loading customers:", error);
+            }
+        }
+
+        // ==================== RENDER ====================
+        function renderLeads() {
+            if (leads.length === 0) {
+                leadsList.innerHTML = `<tr><td colspan="4" class="text-center p-12 text-slate-400">No demo requests yet.</td></tr>`;
+                return;
+            }
+
+            let html = '';
+            leads.forEach(lead => {
+                const name = lead.fullName || lead.cafeName || 'Unknown';
+                const mobile = lead.mobile || '—';  // now showing mobile instead of email
+                const status = lead.status || 'new';
+                const statusClass = status === 'new' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600';
+
+                html += `
+                    <tr class="border-b">
+                        <td class="p-6 font-bold">${escapeHtml(name)}</td>
+                        <td class="p-6 text-[#c5a059] font-medium">${escapeHtml(mobile)}</td>
+                        <td class="p-6"><span class="status-badge ${statusClass}">${status.toUpperCase()}</span></td>
+                        <td class="p-6 flex gap-2 flex-wrap">
+                            ${status === 'new' ? `<button onclick="updateLeadStatus('${lead.id}', 'contacted')" class="text-[10px] bg-slate-100 px-3 py-1 rounded font-bold uppercase">Mark Contacted</button>` : ''}
+                            <button onclick="convertToCustomer('${lead.id}')" class="text-[10px] bg-green-500 text-white px-3 py-1 rounded font-bold uppercase">Make Customer</button>
+                            <button onclick="deleteLead('${lead.id}')" class="text-[10px] bg-red-500 text-white px-3 py-1 rounded font-bold uppercase">Delete</button>
+                        </td>
+                    </tr>`;
+            });
+            leadsList.innerHTML = html;
+        }
+
+        function renderCustomers() {
+            if (customers.length === 0) {
+                customersGrid.innerHTML = `<div class="col-span-3 text-center p-12 text-slate-400">No paid customers yet.</div>`;
+                return;
+            }
+
+            let html = '';
+            customers.forEach(cust => {
+                const cafe = cust.cafeName || cust.fullName || 'Café';
+                const joinDate = cust.convertedAt ? new Date(cust.convertedAt.seconds * 1000).toLocaleDateString() : 'Recently';
+                
+                html += `
+                    <div class="bg-white p-8 rounded-[2rem] border-b-4 border-green-500 shadow-lg">
+                        <div class="flex justify-between items-start mb-4">
+                            <h4 class="text-xl font-bold">${escapeHtml(cafe)}</h4>
+                            <span class="status-badge bg-green-100 text-green-700">Active</span>
+                        </div>
+                        <p class="text-xs text-slate-400 font-bold uppercase tracking-widest mb-6">Joined: ${joinDate}</p>
+                        <p class="text-xs mb-2">${escapeHtml(cust.mobile || '')}</p>
+                        <button onclick="switchTab('billing')" class="w-full border-2 border-[#c5a059] text-[#c5a059] py-2 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-[#c5a059] hover:text-white transition">Billing</button>
+                    </div>`;
+            });
+            customersGrid.innerHTML = html;
+        }
+
+        function escapeHtml(unsafe) {
+            if (!unsafe) return unsafe;
+            return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&#039;").replace(/'/g, "&#039;");
+        }
+
+        // ==================== ACTIONS ====================
+        window.updateLeadStatus = async function(leadId, newStatus) {
+            try {
+                await db.collection(LEADS_COLLECTION).doc(leadId).update({ status: newStatus });
+                const lead = leads.find(l => l.id === leadId);
+                if (lead) lead.status = newStatus;
+                renderLeads();
+            } catch (error) {
+                alert("Failed to update status: " + error.message);
+            }
+        };
+
+        window.convertToCustomer = async function(leadId) {
+            const lead = leads.find(l => l.id === leadId);
+            if (!lead) return;
+
+            try {
+                const customerData = {
+                    fullName: lead.fullName || '',
+                    mobile: lead.mobile || '',  // store mobile instead of email
+                    cafeName: lead.cafeName || lead.fullName || 'Café',
+                    convertedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    originalLeadId: leadId,
+                    status: 'active'
+                };
+                
+                await db.collection(CUSTOMERS_COLLECTION).add(customerData);
+                await db.collection(LEADS_COLLECTION).doc(leadId).delete();
+                
+                await loadLeadsFromFirebase();
+                await loadCustomersFromFirebase();
+                
+                alert(`${lead.fullName || lead.cafeName} is now a paid customer!`);
+            } catch (error) {
+                alert("Failed to convert: " + error.message);
+            }
+        };
+
+        window.deleteLead = async function(leadId) {
+            if (!confirm("Delete this lead?")) return;
+            try {
+                await db.collection(LEADS_COLLECTION).doc(leadId).delete();
+                leads = leads.filter(l => l.id !== leadId);
+                renderLeads();
+            } catch (error) {
+                alert("Failed to delete: " + error.message);
+            }
+        };
+
+        window.syncData = async function() {
+            showLoading(true);
+            await Promise.all([loadLeadsFromFirebase(), loadCustomersFromFirebase()]);
+            showLoading(false);
+            lucide.createIcons();
+        };
+
+        function showLoading(show) {
+            if (show) globalLoading.classList.remove('hidden');
+            else globalLoading.classList.add('hidden');
+        }
+
+        // ==================== PDF INVOICE GENERATION (with ₹) ====================
+        window.generateAndDownloadBill = async function() {
+            const name = document.getElementById('bill-name').value.trim();
+            const email = document.getElementById('bill-email').value.trim() || 'customer@tabletap.mn';
+            const amount = document.getElementById('bill-type').value;
+            const desc = document.getElementById('bill-type').selectedOptions[0].text;
+            
+            if(!name) {
+                alert("Please enter café name");
+                return;
+            }
+
+            showLoading(true);
+
+            try {
+                const invoiceDiv = document.getElementById('invoice-template');
+                
+                document.getElementById('invoice-cafe-name').innerText = name;
+                document.getElementById('invoice-cafe-email').innerText = email;
+                
+                const today = new Date();
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + 15);
+                
+                document.getElementById('invoice-date').innerText = today.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'});
+                document.getElementById('invoice-due').innerText = dueDate.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'});
+                
+                const invNum = 'TT-' + today.getFullYear() + '-' + Math.floor(Math.random()*1000).toString().padStart(3,'0');
+                document.getElementById('invoice-number').innerText = invNum;
+                
+                document.getElementById('invoice-desc').innerText = desc;
+                document.getElementById('invoice-amount').innerText = '₹' + amount;  // added ₹ symbol
+                document.getElementById('invoice-total').innerHTML = '₹' + amount;
+                
+                // QR with UPI ID
+                const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa=jaineshsethyj@oksbi&pn=Jainesh%20Seth&am=${amount}&cu=INR`;
+                document.getElementById('invoice-qr').src = qrUrl;
+
+                await new Promise(resolve => {
+                    const img = document.getElementById('invoice-qr');
+                    if (img.complete) resolve();
+                    else img.onload = resolve;
+                });
+
+                const canvas = await html2canvas(invoiceDiv, {
+                    scale: 2,
+                    backgroundColor: '#ffffff',
+                    logging: false
+                });
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({
+                    orientation: 'portrait',
+                    unit: 'px',
+                    format: [800, 1100]
+                });
+
+                const imgData = canvas.toDataURL('image/png');
+                pdf.addImage(imgData, 'PNG', 0, 0, 600, 0);
+                
+                pdf.save(`TableTap_Invoice_${name.replace(/\s+/g, '_')}.pdf`);
+
+                try {
+                    await db.collection('invoices').add({
+                        cafeName: name,
+                        email: email,
+                        amount: parseInt(amount),
+                        description: desc,
+                        invoiceNumber: invNum,
+                        generatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    console.log('Invoice record saved to Firebase');
+                } catch (e) {
+                    console.warn('Could not save invoice to Firebase', e);
+                }
+
+            } catch (error) {
+                console.error('PDF generation error:', error);
+                alert('Error generating PDF: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        };
+
+        // ==================== TAB SWITCHING ====================
+        window.switchTab = function(tabId) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('tab-active'));
+            document.querySelectorAll('nav button').forEach(b => {
+                b.classList.remove('sidebar-active', 'bg-white/10');
+            });
+            
+            document.getElementById('tab-' + tabId).classList.add('tab-active');
+            document.getElementById('nav-' + tabId).classList.add('sidebar-active');
+            document.getElementById('page-title').innerText = document.getElementById('nav-' + tabId).innerText.trim();
+            lucide.createIcons();
+        };
+
+        // ==================== INIT ====================
+        async function init() {
+            showLoading(true);
+            await Promise.all([loadLeadsFromFirebase(), loadCustomersFromFirebase()]);
+            showLoading(false);
+            lucide.createIcons();
+        }
+
+        init();
+    </script>
+</body>
+</html>
